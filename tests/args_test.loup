@@ -1,64 +1,59 @@
 @mode(host.dual)
 
 from debug.assert import (expect, expectEq);
-from cli.args import (parse_args, DEFAULT_GREETING);
+from cli.args import (parse_args, strip_quotes, MODE_LIST, MODE_SHOW, MODE_ASSIGN, MODE_ARITH,
+    MSG_NO_PROMPT);
 
-func test_no_arguments(): void {
+func same(got: string, want: string, what: string): void {
+    expect(got == want, what + ": got '" + got + "', want '" + want + "'");
+}
+
+func test_list(): void {
     let none: list[string] = [];
-    let opts = parse_args(none).unwrap();
-    expectEq(opts.command, "", "no command");
-    expectEq(opts.operands.len(), 0, "no operands");
-    expectEq(opts.greeting, DEFAULT_GREETING, "default greeting");
-    expect(!opts.help and !opts.version and !opts.verbose and !opts.shout, "no flags set");
+    expectEq(parse_args(none).unwrap().mode, MODE_LIST, "no arguments");
 }
 
-func test_command_and_operands(): void {
-    let opts = parse_args(["hello", "Ann"]).unwrap();
-    expectEq(opts.command, "hello", "command");
-    expectEq(opts.operands.len(), 1, "one operand");
-    expectEq(opts.operands[0], "Ann", "operand");
+func test_show_prefix(): void {
+    let opts = parse_args(["PA"]).unwrap();
+    expectEq(opts.mode, MODE_SHOW, "prefix");
+    same(opts.text, "PA", "prefix text");
+    same(parse_args(["\"PA\""]).unwrap().text, "PA", "quoted prefix");
+    same(parse_args(["two", "words"]).unwrap().text, "two words", "joined");
 }
 
-func test_flags_anywhere(): void {
-    let opts = parse_args(["-v", "hello", "--shout", "Ann"]).unwrap();
-    expect(opts.verbose, "verbose");
-    expect(opts.shout, "shout");
-    expectEq(opts.command, "hello", "command");
-    expectEq(opts.operands[0], "Ann", "operand");
+func test_assign(): void {
+    let opts = parse_args(["X=1"]).unwrap();
+    expectEq(opts.mode, MODE_ASSIGN, "assignment");
+    same(opts.text, "X=1", "text");
+    same(parse_args(["\"X=a b\" ignored"]).unwrap().text, "X=a b", "quoted assignment");
+    expect(parse_args(["=1"]).is_err(), "no name");
+    expect(parse_args(["/x=1"]).is_err(), "unquoted name starting with /");
+    expectEq(parse_args(["\"/x=1\""]).unwrap().mode, MODE_ASSIGN, "quoted / name");
+}
+
+func test_arith(): void {
+    let opts = parse_args(["/A", "1", "+", "2"]).unwrap();
+    expectEq(opts.mode, MODE_ARITH, "/A");
+    same(opts.text, "1 + 2", "expression words joined");
+    same(parse_args(["/a3*4"]).unwrap().text, "3*4", "glued");
+    same(parse_args(["-a", "x=1"]).unwrap().text, "x=1", "-a");
+    same(parse_args(["/A"]).unwrap().text, "", "empty expression");
+}
+
+func test_prompt_not_supported(): void {
+    same(parse_args(["/P", "x=Name? "]).unwrap_err(), MSG_NO_PROMPT, "/P");
+}
+
+func test_strip_quotes(): void {
+    same(strip_quotes("plain"), "plain", "no quotes");
+    same(strip_quotes("\"a=b\" rest"), "a=b", "up to the last quote");
+    same(strip_quotes("\"a=b"), "a=b", "no closing quote");
 }
 
 func test_help_and_version(): void {
+    expect(parse_args(["/?"]).unwrap().help, "/?");
+    expect(parse_args(["/a", "1", "-?"]).unwrap().help, "-? anywhere");
     expect(parse_args(["--help"]).unwrap().help, "--help");
-    expect(parse_args(["-h"]).unwrap().help, "-h");
     expect(parse_args(["--version"]).unwrap().version, "--version");
-    expect(parse_args(["-V"]).unwrap().version, "-V");
-}
-
-func test_value_option_forms(): void {
-    expectEq(parse_args(["-g", "Hi"]).unwrap().greeting, "Hi", "-g VALUE");
-    expectEq(parse_args(["--greeting", "Hi"]).unwrap().greeting, "Hi", "--greeting VALUE");
-    expectEq(parse_args(["--greeting=a=b"]).unwrap().greeting, "a=b", "--greeting=VALUE keeps '='");
-}
-
-func test_double_dash_ends_options(): void {
-    let opts = parse_args(["hello", "--", "--shout"]).unwrap();
-    expect(!opts.shout, "--shout after -- is an operand");
-    expectEq(opts.operands[0], "--shout", "operand");
-}
-
-func test_lone_dash_is_operand(): void {
-    let opts = parse_args(["hello", "-"]).unwrap();
-    expectEq(opts.operands[0], "-", "operand");
-}
-
-func test_unknown_option(): void {
-    expectEq(parse_args(["--nope"]).unwrap_err(), "unknown option '--nope'", "error message");
-}
-
-func test_missing_value(): void {
-    expectEq(parse_args(["-g"]).unwrap_err(), "option '-g' requires a value", "error message");
-}
-
-func test_flag_with_value(): void {
-    expectEq(parse_args(["--shout=1"]).unwrap_err(), "option '--shout' does not take a value", "error message");
+    same(parse_args(["--", "/?"]).unwrap().text, "/?", "/? after --");
 }

@@ -3,11 +3,12 @@
 # Application identity. Keep APP_NAME and APP_VERSION in step with `name`
 # and `version` in package.lppkg.
 
-pub const APP_NAME: string = "myapp";
+pub const APP_NAME: string = "set";
 pub const APP_VERSION: string = "0.1.0";
-pub const APP_SUMMARY: string = "A command-line application written in Loup.";
+pub const APP_SUMMARY: string = "Display environment variables and evaluate set /a arithmetic (a Loup recreation of the cmd.exe set command).";
 
-# Exit statuses returned by main().
+# Exit statuses returned by main(), as cmd sets ERRORLEVEL. The set /a
+# errors use cmd's own large values (Linux keeps their low 8 bits: 204-209);
+# they live in commands/arith.loup.
 pub const EXIT_OK: int = 0;
-pub const EXIT_FAILURE: int = 1;
-pub const EXIT_USAGE: int = 2;
+pub const EXIT_FAILURE: int = 1;   # no variable matched, or a syntax error

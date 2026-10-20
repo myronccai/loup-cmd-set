@@ -1,98 +1,100 @@
 @mode(host.dual)
 
-# Command-line parsing. Loup 1.26 has no CLI library, so arguments are
-# parsed by hand into an Options value.
+# Command-line parsing for set. cmd's SET takes the rest of the command line
+# as one text, so the arguments are joined with spaces:
 #
-# Grammar: [OPTIONS] COMMAND [OPERANDS...]
-#   Options may appear anywhere before `--`; everything after `--` is an
-#   operand. Value options accept `--name VALUE` and `--name=VALUE`.
+#   set                  list every variable
+#   set PREFIX           list the variables whose names start with PREFIX
+#   set NAME=value       assign (lasts only for this command here)
+#   set /A expression    evaluate and print an arithmetic expression
+#
+# `/?` (or `-?`) asks for help, following the Windows switch convention in
+# win/switches.loup; `--` ends switch parsing.
 
-pub const DEFAULT_GREETING: string = "Hello";
+from win.messages import (MSG_SYNTAX);
+from win.switches import (SwitchSpec, parse_switches);
+
+pub const MODE_LIST: int = 0;
+pub const MODE_SHOW: int = 1;
+pub const MODE_ASSIGN: int = 2;
+pub const MODE_ARITH: int = 3;
+
+pub const MSG_NO_PROMPT: string = "set /P (prompt for a value) is not supported by this version.";
 
 pub struct Options {
-    pub command: string;
-    pub operands: list[string];
     pub help: bool;
     pub version: bool;
-    pub verbose: bool;
-    pub shout: bool;
-    pub greeting: string;
+    pub mode: int;
+    pub text: string;   # the prefix, the assignment or the expression
 }
 
-pub func parse_args(argv: list[string]): Result[Options, string] {
-    var command = "";
-    var operands: list[string] = [];
-    var help = false;
-    var version = false;
-    var verbose = false;
-    var shout = false;
-    var greeting = DEFAULT_GREETING;
-    var only_operands = false;
+func options(mode: int, text: string): Options {
+    return Options(help = false, version = false, mode = mode, text = text);
+}
 
-    var i = 0;
-    while (i < argv.len()) {
-        let arg = argv[i];
-        i += 1;
-
-        if (only_operands or arg == "-" or !arg.startsWith("-")) {
-            if (command.is_empty()) {
-                command = arg;
-            } else {
-                operands.push(arg);
-            }
-            continue;
-        }
-        if (arg == "--") {
-            only_operands = true;
-            continue;
-        }
-
-        # Split `--name=value` into its name and inline value.
-        var name = arg;
-        var inline_value: Option[string] = None;
-        if (arg.startsWith("--") and arg.contains("=")) {
-            let parts = arg.split("=");
-            name = parts[0];
-            inline_value = Some(parts.slice(1).join("="));
-        }
-
-        if (name == "-g" or name == "--greeting") {
-            match inline_value {
-                Some(v) => { greeting = v; },
-                None => {
-                    if (i >= argv.len()) {
-                        return Err(i"option '{$ name $}' requires a value");
-                    }
-                    greeting = argv[i];
-                    i += 1;
-                },
-            }
-            continue;
-        }
-
-        if (inline_value.is_some()) {
-            return Err(i"option '{$ name $}' does not take a value");
-        }
-        if (name == "-h" or name == "--help") {
-            help = true;
-        } else if (name == "-V" or name == "--version") {
-            version = true;
-        } else if (name == "-v" or name == "--verbose") {
-            verbose = true;
-        } else if (name == "--shout") {
-            shout = true;
-        } else {
-            return Err(i"unknown option '{$ name $}'");
-        }
+# The text of a quoted argument the way cmd reads `set "NAME=value"`: from
+# after the first quote to the last one.
+pub func strip_quotes(text: string): string {
+    if (!text.startsWith("\"")) {
+        return text;
     }
+    var last = -1;
+    var i = 0;
+    for (ch in text) {
+        if (ch == "\"") {
+            last = i;
+        }
+        i += 1;
+    }
+    if (last <= 0) {
+        return text.slice(1);
+    }
+    return text.slice(1, last);
+}
 
-    return Ok(Options(
-        command = command,
-        operands = operands,
-        help = help,
-        version = version,
-        verbose = verbose,
-        shout = shout,
-        greeting = greeting,
-    ));
+# The words after the first argument, joined with spaces.
+func rest_of(words: list[string], first: string): string {
+    var parts: list[string] = [first];
+    for (k in 1..words.len()) {
+        parts.push(words[k]);
+    }
+    return parts.join(" ").trim();
+}
+
+# The statement form of `match` (arms that return) is deliberate: a match
+# expression whose arms build new values returns freed memory natively.
+pub func parse_args(argv: list[string]): Result[Options, string] {
+    let none: list[SwitchSpec] = [];
+    let parsed = match parse_switches(argv, none) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(MSG_SYNTAX);
+        },
+    };
+    if (parsed.help or parsed.version) {
+        return Ok(Options(help = parsed.help, version = parsed.version, mode = MODE_LIST, text = ""));
+    }
+    let words = parsed.operands;
+    if (words.len() == 0) {
+        return Ok(options(MODE_LIST, ""));
+    }
+    let first = words[0];
+    let upper = first.toUpperCase();
+    if (upper == "/A" or upper == "-A" or upper.startsWith("/A")) {
+        return Ok(options(MODE_ARITH, rest_of(words, first.slice(2))));
+    }
+    if (upper == "/P" or upper == "-P" or upper.startsWith("/P")) {
+        return Err(MSG_NO_PROMPT);
+    }
+    let raw = words.join(" ");
+    let text = strip_quotes(raw);
+    let eq = text.index_of("=");
+    if (eq < 0) {
+        return Ok(options(MODE_SHOW, text));
+    }
+    let name = text.slice(0, eq);
+    if (name.len() == 0 or (name.startsWith("/") and !raw.startsWith("\""))) {
+        return Err(MSG_SYNTAX);
+    }
+    return Ok(options(MODE_ASSIGN, text));
 }

@@ -1,28 +1,31 @@
 @mode(host.dual)
 
-from appinfo import (APP_NAME, APP_VERSION, APP_SUMMARY);
-from cli.args import (DEFAULT_GREETING);
+from appinfo import (APP_NAME, APP_VERSION);
 
+# The text of `set /?`: a short summary in this project's own words.
 pub func usage(): string {
     let lines = [
-        i"usage: {$ APP_NAME $} [OPTIONS] COMMAND [ARGS...]",
+        "SET [prefix]",
+        "SET name=value",
+        "SET /A expression",
         "",
-        APP_SUMMARY,
+        "Lists environment variables, or evaluates an integer expression.",
         "",
-        "Commands:",
-        "  hello [NAME]          Print a greeting (NAME defaults to 'world')",
-        "  help                  Show this help",
-        "",
-        "Options:",
-        i"  -g, --greeting TEXT   Greeting used by 'hello' (default: {$ DEFAULT_GREETING $})",
-        "      --shout           Print the greeting in upper case",
-        "  -v, --verbose         Print diagnostic messages to stderr",
-        "  -h, --help            Show this help and exit",
-        "  -V, --version         Show the version and exit",
+        "  (nothing)      List every variable as name=value, sorted by name.",
+        "  prefix         List the variables whose names start with prefix",
+        "                 (ignoring case); ERRORLEVEL 1 if there are none.",
+        "  name=value     Accepted, but a program cannot change its caller's",
+        "                 environment, so it has no lasting effect.",
+        "  /A expression  Evaluate with 32-bit integers and print the result.",
+        "                 Numbers: 17, 0x11 (hexadecimal), 021 (octal). Names",
+        "                 read environment variables (0 if undefined).",
+        "                 Operators, loosest first: ,  then = *= /= %= += -=",
+        "                 &= ^= |= <<= >>=  then |  ^  &  << >>  + -  * / %",
+        "                 then unary - + ! ~ and ( ).",
     ];
     return lines.join("\n");
 }
 
 pub func version_line(): string {
-    return i"{$ APP_NAME $} {$ APP_VERSION $}";
+    return i"{$ APP_NAME $} (loup-cmd-{$ APP_NAME $}) {$ APP_VERSION $}";
 }

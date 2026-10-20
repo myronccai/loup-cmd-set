@@ -1,0 +1,393 @@
+@mode(host.dual)
+
+# cmd's SET /A expression language: 32-bit signed integers that wrap on
+# overflow, decimal, hexadecimal (0x1F) and octal (017) constants,
+# variables read from the environment (0 when undefined), and these
+# operators, from the lowest precedence to the highest:
+#
+#   ,                                     expression separator (left to right)
+#   = *= /= %= += -= &= ^= |= <<= >>=     assignment (right to left)
+#   |    ^    &                           bitwise or, exclusive or, and
+#   << >>                                 shifts (arithmetic right shift)
+#   + -     * / %                         arithmetic
+#   - + ! ~                               unary minus, plus, logical not, bitwise not
+#   ( )                                   grouping
+#
+# The parser is a Pratt parser (precedence climbing) that evaluates as it
+# goes: there is nothing to short-circuit in this language.
+
+from commands.environ import (EnvTable, find_index);
+
+pub const MSG_UNBALANCED: string = "Unbalanced parenthesis.";
+pub const MSG_MISSING_OPERAND: string = "Missing operand.";
+pub const MSG_MISSING_OPERATOR: string = "Missing operator.";
+pub const MSG_BAD_NUMBER: string = "Invalid number.  Numeric constants are either decimal (17), hexadecimal (0x11), or octal (021).";
+pub const MSG_TOO_BIG: string = "Invalid number.  Numbers are limited to 32-bits of precision.";
+pub const MSG_DIVIDE_BY_ZERO: string = "Divide by zero error.";
+
+# cmd's ERRORLEVEL for each set /a error.
+pub const ERR_UNBALANCED: int = 1073750988;
+pub const ERR_MISSING_OPERAND: int = 1073750989;
+pub const ERR_SYNTAX: int = 1073750990;
+pub const ERR_INVALID_NUMBER: int = 1073750991;
+pub const ERR_TOO_BIG: int = 1073750992;
+pub const ERR_DIVIDE_BY_ZERO: int = 1073750993;
+
+# The ERRORLEVEL for an error message.
+pub func error_level(message: string): int {
+    if (message == MSG_UNBALANCED) {
+        return ERR_UNBALANCED;
+    } else if (message == MSG_MISSING_OPERAND) {
+        return ERR_MISSING_OPERAND;
+    } else if (message == MSG_BAD_NUMBER) {
+        return ERR_INVALID_NUMBER;
+    } else if (message == MSG_TOO_BIG) {
+        return ERR_TOO_BIG;
+    } else if (message == MSG_DIVIDE_BY_ZERO) {
+        return ERR_DIVIDE_BY_ZERO;
+    }
+    return ERR_SYNTAX;
+}
+
+# Token kinds.
+pub const TOK_NUM: int = 0;
+pub const TOK_NAME: int = 1;
+pub const TOK_OP: int = 2;
+pub const TOK_END: int = 3;
+
+pub struct Tokens {
+    pub kinds: list[int];
+    pub texts: list[string];
+}
+
+const DIGITS: string = "0123456789";
+const ALNUM: string = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const OP_CHARS: string = "+-*/%&^|!~(),=<>";
+# Quotes are ignored, as cmd ignores them in an expression.
+const BLANKS: string = " \t\r\n\"";
+
+func in_set(chars: string, ch: string): bool {
+    return chars.index_of(ch) >= 0;
+}
+
+# Splits an expression into numbers, names and operators, ending with
+# TOK_END. A name is any run of characters that are not blanks or
+# operators and does not start with a digit.
+pub func tokenize(expr: string): Tokens {
+    var chars: list[string] = [];
+    for (ch in expr) {
+        chars.push(ch);
+    }
+    var kinds: list[int] = [];
+    var texts: list[string] = [];
+    let n = chars.len();
+    var i = 0;
+    while (i < n) {
+        let c = chars[i];
+        if (in_set(BLANKS, c)) {
+            i += 1;
+            continue;
+        }
+        var j = i + 1;
+        var kind = TOK_NAME;
+        if (in_set(DIGITS, c)) {
+            kind = TOK_NUM;
+            while (j < n and in_set(ALNUM, chars[j])) {
+                j += 1;
+            }
+        } else if (in_set(OP_CHARS, c)) {
+            kind = TOK_OP;
+            let two = if (i + 1 < n) { c + chars[i + 1] } else { c };
+            let three = if (i + 2 < n) { two + chars[i + 2] } else { two };
+            if (three == "<<=" or three == ">>=") {
+                j = i + 3;
+            } else if (two == "<<" or two == ">>" or (two.len() == 2 and two.endsWith("=")
+                and in_set("*/%+-&^|", c))) {
+                j = i + 2;
+            }
+        } else {
+            while (j < n and !in_set(BLANKS, chars[j]) and !in_set(OP_CHARS, chars[j])) {
+                j += 1;
+            }
+        }
+        kinds.push(kind);
+        texts.push(chars.slice(i, j).join(""));
+        i = j;
+    }
+    kinds.push(TOK_END);
+    texts.push("");
+    return Tokens(kinds = kinds, texts = texts);
+}
+
+# A value as a 32-bit signed integer (two's complement wrap-around).
+pub func wrap32(v: int): int {
+    let m = v & 0xFFFFFFFF;
+    if (m >= 0x80000000) {
+        return m - 0x100000000;
+    }
+    return m;
+}
+
+# The value of a numeric constant: `0x` hexadecimal, a leading `0` octal,
+# otherwise decimal. Hexadecimal and octal constants may use all 32 bits
+# (0xFFFFFFFF is -1); decimal ones stop at 2147483647. Throws the
+# "Invalid number" errors.
+pub func parse_number(text: string): int {
+    var base = 10;
+    var digits = text;
+    var limit = 2147483647;
+    if (text.startsWith("0x") or text.startsWith("0X")) {
+        base = 16;
+        digits = text.slice(2);
+        limit = 0xFFFFFFFF;
+    } else if (text.startsWith("0") and text.len() > 1) {
+        base = 8;
+        digits = text.slice(1);
+        limit = 0xFFFFFFFF;
+    }
+    if (digits.len() == 0) {
+        throw ValueError(MSG_BAD_NUMBER);
+    }
+    var value = 0;
+    for (ch in digits.toLowerCase()) {
+        let d = "0123456789abcdef".index_of(ch);
+        if (d < 0 or d >= base) {
+            throw ValueError(MSG_BAD_NUMBER);
+        }
+        value = value * base + d;
+        if (value > limit) {
+            throw ValueError(MSG_TOO_BIG);
+        }
+    }
+    return wrap32(value);
+}
+
+# The evaluator's state: the tokens, the position, the variable a bare name
+# just read (for assignments), the environment, and the variables assigned
+# so far (names compare without regard to case, as in cmd).
+pub struct Machine {
+    pub var kinds: list[int];
+    pub var texts: list[string];
+    pub var pos: int;
+    pub var lvalue: string;
+    pub var env: EnvTable;
+    pub var names: list[string];
+    pub var values: list[int];
+}
+
+func assigned_index(m: Machine, name: string): int {
+    let upper = name.toUpperCase();
+    for (i in 0..m.names.len()) {
+        if (m.names[i].toUpperCase() == upper) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+func set_variable(edits m: Machine, name: string, value: int): void {
+    let i = assigned_index(m, name);
+    if (i >= 0) {
+        m.values[i] = value;
+    } else {
+        m.names.push(name);
+        m.values.push(value);
+    }
+}
+
+# How deep a variable may name another variable (`a=b`, `b=5`: a is 5).
+const MAX_INDIRECTION: int = 16;
+
+# The value of a variable: assigned in this expression, or read from the
+# environment. An undefined or empty variable is 0; a value that starts
+# with a number is that number; a value that is a single name is that
+# variable's value; anything else is 0.
+func variable_value(m: Machine, name: string, depth: int): int {
+    let i = assigned_index(m, name);
+    if (i >= 0) {
+        return m.values[i];
+    }
+    let e = find_index(m.env, name);
+    if (e < 0 or depth > MAX_INDIRECTION) {
+        return 0;
+    }
+    let toks = tokenize(m.env.values[e]);
+    var k = 0;
+    var negative = false;
+    if (toks.kinds[0] == TOK_OP and (toks.texts[0] == "-" or toks.texts[0] == "+")) {
+        negative = toks.texts[0] == "-";
+        k = 1;
+    }
+    if (toks.kinds[k] == TOK_NUM) {
+        let v = parse_number(toks.texts[k]);
+        return if (negative) { wrap32(0 - v) } else { v };
+    }
+    if (k == 0 and toks.kinds[0] == TOK_NAME and toks.kinds[1] == TOK_END) {
+        return variable_value(m, toks.texts[0], depth + 1);
+    }
+    return 0;
+}
+
+# The precedence of an infix operator, or -1 for a token that cannot
+# follow an operand.
+func infix_power(op: string): int {
+    if (op == ",") {
+        return 1;
+    } else if (is_assignment(op)) {
+        return 2;
+    } else if (op == "|") {
+        return 3;
+    } else if (op == "^") {
+        return 4;
+    } else if (op == "&") {
+        return 5;
+    } else if (op == "<<" or op == ">>") {
+        return 6;
+    } else if (op == "+" or op == "-") {
+        return 7;
+    } else if (op == "*" or op == "/" or op == "%") {
+        return 8;
+    }
+    return -1;
+}
+
+const PREFIX_POWER: int = 9;
+
+func is_assignment(op: string): bool {
+    return op.endsWith("=");
+}
+
+# Applies a binary arithmetic or bitwise operator with cmd's 32-bit
+# semantics. Shift counts use their low 5 bits, as the x86 shift
+# instructions do.
+pub func apply_binary(op: string, a: int, b: int): int {
+    if (op == "+") {
+        return wrap32(a + b);
+    } else if (op == "-") {
+        return wrap32(a - b);
+    } else if (op == "*") {
+        return wrap32(a * b);
+    } else if (op == "/" or op == "%") {
+        if (b == 0) {
+            throw ValueError(MSG_DIVIDE_BY_ZERO);
+        }
+        return if (op == "/") { wrap32(a / b) } else { wrap32(a % b) };
+    } else if (op == "<<") {
+        return wrap32(a << (b & 31));
+    } else if (op == ">>") {
+        return a >> (b & 31);
+    } else if (op == "&") {
+        return a & b;
+    } else if (op == "|") {
+        return a | b;
+    }
+    return a ^ b;
+}
+
+# Applies a prefix operator.
+pub func apply_unary(op: string, a: int): int {
+    if (op == "-") {
+        return wrap32(0 - a);
+    } else if (op == "!") {
+        return if (a == 0) { 1 } else { 0 };
+    } else if (op == "~") {
+        return wrap32(0 - a - 1);
+    }
+    return a;
+}
+
+# Parses and evaluates an expression whose operators bind at least as
+# tightly as `min_power` (a Pratt parser). Leaves m.lvalue set to the
+# variable's name when the expression was a bare name, "" otherwise.
+func parse_expr(edits m: Machine, min_power: int): int {
+    let kind = m.kinds[m.pos];
+    let text = m.texts[m.pos];
+    var left = 0;
+    if (kind == TOK_END) {
+        throw ValueError(MSG_MISSING_OPERAND);
+    }
+    m.pos += 1;
+    if (kind == TOK_NUM) {
+        left = parse_number(text);
+        m.lvalue = "";
+    } else if (kind == TOK_NAME) {
+        left = variable_value(m, text, 0);
+        m.lvalue = text;
+    } else if (text == "(") {
+        left = parse_expr(edits: m, 0);
+        if (m.kinds[m.pos] == TOK_END) {
+            throw ValueError(MSG_UNBALANCED);
+        }
+        m.pos += 1;
+        m.lvalue = "";
+    } else if (text == "-" or text == "+" or text == "!" or text == "~") {
+        left = apply_unary(text, parse_expr(edits: m, PREFIX_POWER));
+        m.lvalue = "";
+    } else {
+        throw ValueError(MSG_MISSING_OPERAND);
+    }
+
+    while (true) {
+        let k = m.kinds[m.pos];
+        let op = m.texts[m.pos];
+        if (k == TOK_END or (k == TOK_OP and op == ")")) {
+            break;
+        }
+        let power = if (k == TOK_OP) { infix_power(op) } else { -1 };
+        if (power < 0) {
+            throw ValueError(MSG_MISSING_OPERATOR);
+        }
+        if (power < min_power) {
+            break;
+        }
+        m.pos += 1;
+        if (op == ",") {
+            left = parse_expr(edits: m, power + 1);
+        } else if (is_assignment(op)) {
+            let name = m.lvalue;
+            if (name.len() == 0) {
+                throw ValueError(MSG_MISSING_OPERAND);
+            }
+            # Right to left: the right side may hold more assignments.
+            let rhs = parse_expr(edits: m, power);
+            var value = rhs;
+            if (op != "=") {
+                value = apply_binary(op.slice(0, op.len() - 1), variable_value(m, name, 0), rhs);
+            }
+            set_variable(edits: m, name, value);
+            left = value;
+        } else {
+            left = apply_binary(op, left, parse_expr(edits: m, power + 1));
+        }
+        m.lvalue = "";
+    }
+    return left;
+}
+
+# The result of evaluating an expression: its value, or the error message
+# ("" when there is none), and the variables it assigned.
+pub struct Outcome {
+    pub value: int;
+    pub error: string;
+    pub names: list[string];
+    pub values: list[int];
+}
+
+# Evaluates a SET /A expression against an environment.
+pub func evaluate(expr: string, env: EnvTable): Outcome {
+    let toks = tokenize(expr);
+    var names: list[string] = [];
+    var values: list[int] = [];
+    var m = Machine(kinds = toks.kinds, texts = toks.texts, pos = 0, lvalue = "", env = env,
+        names = names, values = values);
+    try {
+        let value = parse_expr(edits: m, 0);
+        if (m.kinds[m.pos] != TOK_END) {
+            # Only a `)` stops the top level early.
+            throw ValueError(MSG_UNBALANCED);
+        }
+        return Outcome(value = value, error = "", names = m.names, values = m.values);
+    } catch (Exception as e) {
+        return Outcome(value = 0, error = e.message, names = m.names, values = m.values);
+    }
+}

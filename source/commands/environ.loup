@@ -1,0 +1,88 @@
+@mode(host.dual)
+
+# The process environment as cmd's SET sees it: variable names compare
+# without regard to case, and listings are in name order (upper-case form
+# first, as Windows keeps its environment block).
+
+# The variables, in the order the process received them.
+pub struct EnvTable {
+    pub names: list[string];
+    pub values: list[string];
+}
+
+pub func env_table(names: list[string], values: list[string]): EnvTable {
+    return EnvTable(names = names, values = values);
+}
+
+# Parses an environment block: `NAME=value` entries separated by NUL bytes
+# (the format of /proc/self/environ). Entries without `=` after the first
+# character are skipped.
+pub func parse_environ(text: string): EnvTable {
+    var names: list[string] = [];
+    var values: list[string] = [];
+    for (entry in text.split(str(char.of(0)))) {
+        if (entry.len() < 2) {
+            continue;
+        }
+        let eq = entry.slice(1).index_of("=");
+        if (eq < 0) {
+            continue;
+        }
+        names.push(entry.slice(0, eq + 1));
+        values.push(entry.slice(eq + 2));
+    }
+    return env_table(names, values);
+}
+
+# This process's environment. Loup 1.26.0 has no way to list the
+# environment, so it is read from /proc/self/environ (Linux).
+pub func read_environment(): EnvTable {
+    let path = "/proc/self/environ";
+    if (!exists(path)) {
+        let none: list[string] = [];
+        return env_table(none, none);
+    }
+    return parse_environ(readText(path));
+}
+
+# The index of a variable: the exact name first, then the first name that
+# differs only in case; -1 when there is none.
+pub func find_index(table: EnvTable, name: string): int {
+    for (i in 0..table.names.len()) {
+        if (table.names[i] == name) {
+            return i;
+        }
+    }
+    let upper = name.toUpperCase();
+    for (i in 0..table.names.len()) {
+        if (table.names[i].toUpperCase() == upper) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+# `NAME=value` lines for the variables whose names start with `prefix`
+# (ignoring case; "" for all), sorted by name. The sort uses keys
+# `UPPER<NUL>line`: a comparator that upper-cases is very costly natively.
+pub func listing(table: EnvTable, prefix: string): list[string] {
+    let sep = str(char.of(0));
+    let want = prefix.toUpperCase();
+    var keyed: list[string] = [];
+    for (i in 0..table.names.len()) {
+        let upper = table.names[i].toUpperCase();
+        # Names that start with `=` (Windows' per-drive directories) are
+        # hidden, as in cmd.
+        if (upper.startsWith(want) and !upper.startsWith("=")) {
+            keyed.push(upper + sep + table.names[i] + "=" + table.values[i]);
+        }
+    }
+    keyed.sort(func(a: string, b: string): int {
+        return a.compareTo(b);
+    });
+    var out: list[string] = [];
+    for (k in keyed) {
+        out.push(k.slice(k.index_of(sep) + 1));
+    }
+    return out;
+}

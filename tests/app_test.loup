@@ -1,25 +1,26 @@
 @mode(host.dual)
 
 # Exit statuses of the whole command line. These tests print the program's
-# normal output and error messages.
+# normal output.
 
 from debug.assert import (expectEq);
-from appinfo import (EXIT_OK, EXIT_USAGE);
+from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.app import (run);
+from commands.arith import (ERR_DIVIDE_BY_ZERO);
 
 func test_version_succeeds(): void {
     expectEq(run(["--version"]), EXIT_OK, "--version");
 }
 
-func test_hello_succeeds(): void {
-    expectEq(run(["hello", "tests"]), EXIT_OK, "hello NAME");
+func test_help_succeeds(): void {
+    expectEq(run(["/?"]), EXIT_OK, "/?");
 }
 
-func test_unknown_command_is_usage_error(): void {
-    expectEq(run(["bogus"]), EXIT_USAGE, "unknown command");
-}
-
-func test_missing_command_is_usage_error(): void {
-    let none: list[string] = [];
-    expectEq(run(none), EXIT_USAGE, "no command");
+func test_show_and_arith(): void {
+    expectEq(run(["PATH"]), EXIT_OK, "PATH is set");
+    expectEq(run(["NO_SUCH_VARIABLE_PREFIX_X"]), EXIT_FAILURE, "nothing matches");
+    expectEq(run(["/a", "6*7"]), EXIT_OK, "arithmetic");
+    expectEq(run(["/a", "1/0"]), ERR_DIVIDE_BY_ZERO, "cmd's ERRORLEVEL");
+    expectEq(run(["X=1"]), EXIT_OK, "assignment");
+    expectEq(run(["/a"]), EXIT_FAILURE, "empty expression");
 }

@@ -1,0 +1,41 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.environ import (parse_environ, find_index, listing, read_environment, env_table);
+
+func same(got: string, want: string, what: string): void {
+    expect(got == want, what + ": got '" + got + "', want '" + want + "'");
+}
+
+func block(entries: list[string]): string {
+    let sep = str(char.of(0));
+    return entries.join(sep) + sep;
+}
+
+func test_parse_environ(): void {
+    let t = parse_environ(block(["A=1", "B=x=y", "=C:=C:\\", "EMPTY=", "junk"]));
+    same(t.names.join(","), "A,B,=C:,EMPTY", "names");
+    same(t.values.join(","), "1,x=y,C:\\,", "values keep later =");
+}
+
+func test_find_index(): void {
+    let t = env_table(["Path", "PATH", "home"], ["a", "b", "c"]);
+    expectEq(find_index(t, "PATH"), 1, "exact first");
+    expectEq(find_index(t, "path"), 0, "then ignoring case");
+    expectEq(find_index(t, "HOME"), 2, "upper-case lookup");
+    expectEq(find_index(t, "none"), -1, "missing");
+}
+
+func test_listing_sorted(): void {
+    let t = env_table(["zeta", "Alpha", "_u", "ALPHABET", "b"], ["1", "2", "3", "4", "5"]);
+    same(listing(t, "").join("|"), "Alpha=2|ALPHABET=4|b=5|zeta=1|_u=3", "by upper-case name");
+    same(listing(t, "al").join("|"), "Alpha=2|ALPHABET=4", "prefix ignores case");
+    expectEq(listing(t, "q").len(), 0, "no match");
+    let hidden = env_table(["=C:", "X"], ["C:\\", "1"]);
+    same(listing(hidden, "").join("|"), "X=1", "names starting with = are hidden");
+}
+
+func test_read_environment(): void {
+    let t = read_environment();
+    expect(find_index(t, "PATH") >= 0, "PATH is set while testing");
+}

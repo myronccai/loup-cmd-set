@@ -1,0 +1,45 @@
+@mode(host.dual)
+
+# set: lists environment variables, or evaluates a SET /A expression and
+# prints its value, as cmd's built-in SET does at the prompt. A program
+# cannot change its parent's environment, so `set NAME=value` and the
+# assignments inside `set /a` last only for this one command.
+
+from appinfo import (EXIT_OK, EXIT_FAILURE);
+from cli.args import (Options, MODE_LIST, MODE_SHOW, MODE_ASSIGN, MODE_ARITH);
+from commands.arith import (evaluate, error_level);
+from commands.environ import (EnvTable, listing, read_environment);
+from win.messages import (MSG_SYNTAX);
+
+pub func msg_not_defined(prefix: string): string {
+    return "Environment variable " + prefix + " not defined";
+}
+
+pub func run_set(opts: Options): int {
+    let table = read_environment();
+    if (opts.mode == MODE_ARITH) {
+        if (opts.text.trim().len() == 0) {
+            printErr(MSG_SYNTAX);
+            return EXIT_FAILURE;
+        }
+        let result = evaluate(opts.text, table);
+        if (result.error.len() > 0) {
+            printErr(result.error);
+            return error_level(result.error);
+        }
+        println(str(result.value));
+        return EXIT_OK;
+    }
+    if (opts.mode == MODE_ASSIGN) {
+        return EXIT_OK;
+    }
+    let lines = listing(table, opts.text);
+    if (lines.len() == 0 and opts.mode == MODE_SHOW) {
+        printErr(msg_not_defined(opts.text));
+        return EXIT_FAILURE;
+    }
+    for (line in lines) {
+        println(line);
+    }
+    return EXIT_OK;
+}

@@ -1,0 +1,145 @@
+@mode(host.dual)
+
+from debug.assert import (expect, expectEq);
+from commands.environ import (EnvTable, env_table);
+from commands.arith import (evaluate, tokenize, parse_number, wrap32, apply_binary, apply_unary,
+    error_level, TOK_NUM, TOK_NAME, TOK_OP, TOK_END, MSG_UNBALANCED, MSG_MISSING_OPERAND,
+    MSG_MISSING_OPERATOR, MSG_BAD_NUMBER, MSG_TOO_BIG, MSG_DIVIDE_BY_ZERO, ERR_UNBALANCED,
+    ERR_MISSING_OPERAND, ERR_SYNTAX, ERR_INVALID_NUMBER, ERR_TOO_BIG, ERR_DIVIDE_BY_ZERO);
+
+func same(got: string, want: string, what: string): void {
+    expect(got == want, what + ": got '" + got + "', want '" + want + "'");
+}
+
+func no_env(): EnvTable {
+    let none: list[string] = [];
+    return env_table(none, none);
+}
+
+# The value of an expression, or its error message.
+func calc(expr: string): string {
+    let r = evaluate(expr, no_env());
+    if (r.error.len() > 0) {
+        return r.error;
+    }
+    return str(r.value);
+}
+
+func calc_in(expr: string, names: list[string], values: list[string]): string {
+    let r = evaluate(expr, env_table(names, values));
+    if (r.error.len() > 0) {
+        return r.error;
+    }
+    return str(r.value);
+}
+
+func test_tokenize(): void {
+    let t = tokenize("x<<=0x1F, \"y\"*(2)");
+    same(t.texts.join(" "), "x <<= 0x1F , y * ( 2 ) ", "tokens");
+    expectEq(t.kinds[0], TOK_NAME, "name");
+    expectEq(t.kinds[1], TOK_OP, "operator");
+    expectEq(t.kinds[2], TOK_NUM, "number");
+    expectEq(t.kinds[t.kinds.len() - 1], TOK_END, "end");
+    same(tokenize("a.b$c+1").texts.join(" "), "a.b$c + 1 ", "names take odd characters");
+}
+
+func test_parse_number(): void {
+    expectEq(parse_number("17"), 17, "decimal");
+    expectEq(parse_number("0x11"), 17, "hexadecimal");
+    expectEq(parse_number("0X1f"), 31, "upper-case X, lower-case digits");
+    expectEq(parse_number("021"), 17, "octal");
+    expectEq(parse_number("0"), 0, "zero");
+    expectEq(parse_number("0xFFFFFFFF"), -1, "hexadecimal uses all 32 bits");
+    expectEq(parse_number("037777777777"), -1, "so does octal");
+    expectEq(parse_number("2147483647"), 2147483647, "largest decimal");
+}
+
+func test_wrap32(): void {
+    expectEq(wrap32(2147483648), -2147483648, "wraps up");
+    expectEq(wrap32(-2147483649), 2147483647, "wraps down");
+    expectEq(wrap32(4294967296 + 5), 5, "drops high bits");
+}
+
+func test_operators(): void {
+    expectEq(apply_binary("/", -7, 2), -3, "division truncates");
+    expectEq(apply_binary("%", -7, 2), -1, "remainder has the dividend's sign");
+    expectEq(apply_binary("<<", 1, 33), 2, "shift count modulo 32");
+    expectEq(apply_binary(">>", -8, 1), -4, "arithmetic right shift");
+    expectEq(apply_binary("*", 65536, 65536), 0, "multiplication wraps");
+    expectEq(apply_unary("~", 0), -1, "bitwise not");
+    expectEq(apply_unary("!", 7), 0, "logical not");
+    expectEq(apply_unary("-", -2147483648), -2147483648, "negating the minimum wraps");
+}
+
+func test_precedence(): void {
+    same(calc("2+3*4"), "14", "* before +");
+    same(calc("(2+3)*4"), "20", "parentheses");
+    same(calc("8-3-2"), "3", "left to right");
+    same(calc("100/10/5"), "2", "division left to right");
+    same(calc("1+2<<3"), "24", "+ before <<");
+    same(calc("6&3|8^1"), "11", "& before ^ before |");
+    same(calc("-2*-3"), "6", "unary minus binds tighter");
+    same(calc("!0+1"), "2", "unary not");
+    same(calc("~5&0xF"), "10", "bitwise not");
+    same(calc("- - 4"), "4", "repeated unary");
+}
+
+func test_overflow(): void {
+    same(calc("2147483647+1"), "-2147483648", "wraps");
+    same(calc("2147483647*2"), "-2", "multiplication wraps");
+    same(calc("1<<31"), "-2147483648", "shift into the sign bit");
+    same(calc("(-2147483647-1)/-1"), "-2147483648", "the one overflowing division");
+}
+
+func test_assignments(): void {
+    same(calc("x=5"), "5", "value of an assignment");
+    same(calc("x=5, x*2"), "10", "comma: the last value");
+    same(calc("a=b=3, a+b"), "6", "right to left");
+    same(calc("n+=5"), "5", "undefined is 0");
+    same(calc("x=7, x%=4, x"), "3", "%=");
+    same(calc("x=1, x<<=4, x|=1, x"), "17", "<<= and |=");
+    same(calc("X=2, x*=x"), "4", "names ignore case");
+    let r = evaluate("a=1, b=a+1", no_env());
+    same(r.names.join(","), "a,b", "assigned names");
+    expectEq(r.values[1], 2, "assigned value");
+}
+
+func test_environment(): void {
+    same(calc_in("n+1", ["N"], ["41"]), "42", "variable from the environment, any case");
+    same(calc_in("h", ["H"], ["0x10"]), "16", "hexadecimal value");
+    same(calc_in("v", ["V"], [" -3 "]), "-3", "signed value with blanks");
+    same(calc_in("a*2", ["A", "B"], ["b", "7"]), "14", "a value naming a variable");
+    same(calc_in("a", ["A"], ["a"]), "0", "self reference ends");
+    same(calc_in("s+1", ["S"], ["abc def"]), "1", "text is 0");
+    same(calc_in("v", ["V"], ["08"]), MSG_BAD_NUMBER, "bad number in a variable");
+    same(calc_in("n=1, n", ["N"], ["5"]), "1", "assignment shadows the environment");
+}
+
+func test_errors(): void {
+    same(calc("1/0"), MSG_DIVIDE_BY_ZERO, "division by zero");
+    same(calc("x=0, 5%x"), MSG_DIVIDE_BY_ZERO, "remainder by zero");
+    same(calc("x/=0"), MSG_DIVIDE_BY_ZERO, "/= by zero");
+    same(calc("(1+2"), MSG_UNBALANCED, "missing )");
+    same(calc("1+2)"), MSG_UNBALANCED, "extra )");
+    same(calc("1+"), MSG_MISSING_OPERAND, "missing operand");
+    same(calc("*3"), MSG_MISSING_OPERAND, "operator first");
+    same(calc("()"), MSG_MISSING_OPERAND, "empty parentheses");
+    same(calc("3=4"), MSG_MISSING_OPERAND, "assignment to a number");
+    same(calc("1 2"), MSG_MISSING_OPERATOR, "two operands");
+    same(calc("1 < 2"), MSG_MISSING_OPERATOR, "no comparison operators");
+    same(calc("08"), MSG_BAD_NUMBER, "8 is not octal");
+    same(calc("0x"), MSG_BAD_NUMBER, "no hexadecimal digits");
+    same(calc("12ab"), MSG_BAD_NUMBER, "letters in a decimal number");
+    same(calc("2147483648"), MSG_TOO_BIG, "decimal beyond 31 bits");
+    same(calc("0x100000000"), MSG_TOO_BIG, "hexadecimal beyond 32 bits");
+}
+
+func test_error_levels(): void {
+    expectEq(error_level(MSG_UNBALANCED), ERR_UNBALANCED, "unbalanced");
+    expectEq(error_level(MSG_MISSING_OPERAND), ERR_MISSING_OPERAND, "operand");
+    expectEq(error_level(MSG_MISSING_OPERATOR), ERR_SYNTAX, "syntax");
+    expectEq(error_level(MSG_BAD_NUMBER), ERR_INVALID_NUMBER, "number");
+    expectEq(error_level(MSG_TOO_BIG), ERR_TOO_BIG, "32 bits");
+    expectEq(error_level(MSG_DIVIDE_BY_ZERO), ERR_DIVIDE_BY_ZERO, "divide");
+    expectEq(ERR_UNBALANCED, 1073750988, "cmd's number");
+}
