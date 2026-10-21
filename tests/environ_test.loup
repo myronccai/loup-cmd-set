@@ -10,6 +10,7 @@
 
 from debug.assert import (expect, expectEq);
 from commands.environ import (parse_environ, find_index, listing, read_environment, env_table);
+from system.env import (get as env_get);
 
 func same(got: string, want: string, what: string): void {
     expect(got == want, what + ": got '" + got + "', want '" + want + "'");
@@ -46,4 +47,18 @@ func test_listing_sorted(): void {
 func test_read_environment(): void {
     let t = read_environment();
     expect(find_index(t, "PATH") >= 0, "PATH is set while testing");
+}
+
+# system.env (interpreters only, so tests only) reads the environment its
+# own way: every variable read from /proc/self/environ must have the value
+# it reports.
+func test_matches_system_env(): void {
+    let t = read_environment();
+    expect(t.names.len() > 0, "variables read");
+    for (k in 0..t.names.len()) {
+        let name = t.names[k];
+        if (find_index(t, name) == k) {
+            same(env_get(name) ?? "<unset>", t.values[k], name);
+        }
+    }
 }

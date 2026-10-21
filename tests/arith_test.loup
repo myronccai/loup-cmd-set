@@ -9,10 +9,10 @@
 # file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
 # LOUPPATH), one test per `func test_*()`. It is not part of the binary.
 
-from debug.assert import (expect, expectEq);
+from debug.assert import (expect, expectEq, expectThrows);
 from commands.environ import (EnvTable, env_table);
 from commands.arith import (evaluate, tokenize, parse_number, wrap32, apply_binary, apply_unary,
-    error_level, TOK_NUM, TOK_NAME, TOK_OP, TOK_END, MSG_UNBALANCED, MSG_MISSING_OPERAND,
+    TOK_NUM, TOK_NAME, TOK_OP, TOK_END, MSG_UNBALANCED, MSG_MISSING_OPERAND,
     MSG_MISSING_OPERATOR, MSG_BAD_NUMBER, MSG_TOO_BIG, MSG_DIVIDE_BY_ZERO, ERR_UNBALANCED,
     ERR_MISSING_OPERAND, ERR_SYNTAX, ERR_INVALID_NUMBER, ERR_TOO_BIG, ERR_DIVIDE_BY_ZERO);
 
@@ -143,12 +143,25 @@ func test_errors(): void {
     same(calc("0x100000000"), MSG_TOO_BIG, "hexadecimal beyond 32 bits");
 }
 
+# The ERRORLEVEL an expression ends with (0 when it has a value).
+func level(expr: string): int {
+    return evaluate(expr, no_env()).level;
+}
+
 func test_error_levels(): void {
-    expectEq(error_level(MSG_UNBALANCED), ERR_UNBALANCED, "unbalanced");
-    expectEq(error_level(MSG_MISSING_OPERAND), ERR_MISSING_OPERAND, "operand");
-    expectEq(error_level(MSG_MISSING_OPERATOR), ERR_SYNTAX, "syntax");
-    expectEq(error_level(MSG_BAD_NUMBER), ERR_INVALID_NUMBER, "number");
-    expectEq(error_level(MSG_TOO_BIG), ERR_TOO_BIG, "32 bits");
-    expectEq(error_level(MSG_DIVIDE_BY_ZERO), ERR_DIVIDE_BY_ZERO, "divide");
+    expectEq(level("1+2"), 0, "no error");
+    expectEq(level("(1"), ERR_UNBALANCED, "unbalanced");
+    expectEq(level("1+"), ERR_MISSING_OPERAND, "operand");
+    expectEq(level("1 2"), ERR_SYNTAX, "syntax");
+    expectEq(level("09"), ERR_INVALID_NUMBER, "number");
+    expectEq(level("0x1FFFFFFFF"), ERR_TOO_BIG, "32 bits");
+    expectEq(level("7%0"), ERR_DIVIDE_BY_ZERO, "divide");
     expectEq(ERR_UNBALANCED, 1073750988, "cmd's number");
+}
+
+func test_thrown_errors(): void {
+    let e = expectThrows(func(): void { parse_number("0x"); }, "no hexadecimal digits");
+    same(e.message, MSG_BAD_NUMBER, "message");
+    expectThrows(func(): void { parse_number("4294967296"); }, "too big");
+    expectThrows(func(): void { apply_binary("/", 1, 0); }, "the runtime's division by zero");
 }

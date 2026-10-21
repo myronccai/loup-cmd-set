@@ -12,7 +12,7 @@
 
 from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.args import (Options, MODE_LIST, MODE_SHOW, MODE_ASSIGN, MODE_ARITH);
-from commands.arith import (evaluate, error_level);
+from commands.arith import (evaluate);
 from commands.environ import (EnvTable, listing, read_environment);
 from win.messages import (MSG_SYNTAX);
 
@@ -30,7 +30,7 @@ pub func run_set(opts: Options): int {
         let result = evaluate(opts.text, table);
         if (result.error.len() > 0) {
             printErr(result.error);
-            return error_level(result.error);
+            return result.level;
         }
         println(str(result.value));
         return EXIT_OK;
