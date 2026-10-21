@@ -1,5 +1,14 @@
 @mode(host.dual)
 
+# Unit tests for the SET /A evaluator (commands.arith): tokens, numeric
+# constants, 32-bit wrap-around, every operator and its precedence,
+# assignments, environment variables, and the error messages with their
+# ERRORLEVELs.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.environ import (EnvTable, env_table);
 from commands.arith import (evaluate, tokenize, parse_number, wrap32, apply_binary, apply_unary,

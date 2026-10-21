@@ -1,5 +1,13 @@
 @mode(host.dual)
 
+# Unit tests for the environment table (commands.environ): parsing a
+# NUL-separated block, case-insensitive lookup, sorted listings and reading
+# this process's own environment.
+#
+# Runtime: host.dual, run by the test runner: `make test` interprets this
+# file with Stage0 (`loup-bootstrap test --no-parallel`, source/ on
+# LOUPPATH), one test per `func test_*()`. It is not part of the binary.
+
 from debug.assert import (expect, expectEq);
 from commands.environ import (parse_environ, find_index, listing, read_environment, env_table);
 

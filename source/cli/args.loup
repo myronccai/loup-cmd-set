@@ -10,6 +10,9 @@
 #
 # `/?` (or `-?`) asks for help, following the Windows switch convention in
 # win/switches.loup; `--` ends switch parsing.
+#
+# Runtime: host.dual. Compiled into the native binary build/set by `make
+# build`; `loup run source/main.loup` interprets the same code.
 
 from win.messages import (MSG_SYNTAX);
 from win.switches import (SwitchSpec, parse_switches);

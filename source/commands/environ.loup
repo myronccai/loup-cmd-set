@@ -3,6 +3,10 @@
 # The process environment as cmd's SET sees it: variable names compare
 # without regard to case, and listings are in name order (upper-case form
 # first, as Windows keeps its environment block).
+#
+# Runtime: host.dual. Compiled into the native binary build/set by `make
+# build`; `loup run source/main.loup` interprets the same code. It reads
+# /proc/self/environ, so the listing needs Linux's /proc.
 
 # The variables, in the order the process received them.
 pub struct EnvTable {

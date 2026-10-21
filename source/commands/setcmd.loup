@@ -4,6 +4,11 @@
 # prints its value, as cmd's built-in SET does at the prompt. A program
 # cannot change its parent's environment, so `set NAME=value` and the
 # assignments inside `set /a` last only for this one command.
+#
+# Runtime: host.dual. Compiled into the native binary build/set by `make
+# build`; `loup run source/main.loup` interprets the same code. run_set is
+# the only part that prints; the work is done by commands.environ and
+# commands.arith.
 
 from appinfo import (EXIT_OK, EXIT_FAILURE);
 from cli.args import (Options, MODE_LIST, MODE_SHOW, MODE_ASSIGN, MODE_ARITH);

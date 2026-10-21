@@ -15,6 +15,16 @@
 #
 # The parser is a Pratt parser (precedence climbing) that evaluates as it
 # goes: there is nothing to short-circuit in this language.
+#
+# Runtime: host.dual. Compiled into the native binary build/set by `make
+# build`; `loup run source/main.loup` interprets the same code.
+#
+# Structure: the error messages and cmd's ERRORLEVEL for each; the
+# tokenizer; numeric constants and 32-bit wrap-around; the Machine (parser
+# state plus variables) and variable lookup; the operator tables; the
+# Pratt parser itself (parse_expr); and evaluate, the entry point. Every
+# error is thrown as a ValueError carrying cmd's message and caught once,
+# in evaluate, which turns it into an Outcome.
 
 from commands.environ import (EnvTable, find_index);
 
@@ -306,6 +316,8 @@ func parse_expr(edits m: Machine, min_power: int): int {
     if (kind == TOK_END) {
         throw ValueError(MSG_MISSING_OPERAND);
     }
+    # The prefix part: one operand, a parenthesised expression or a unary
+    # operator applied to what follows it.
     m.pos += 1;
     if (kind == TOK_NUM) {
         left = parse_number(text);
@@ -327,6 +339,10 @@ func parse_expr(edits m: Machine, min_power: int): int {
         throw ValueError(MSG_MISSING_OPERAND);
     }
 
+    # The infix loop: keep taking operators that bind at least as tightly as
+    # min_power. Each right operand is parsed one level tighter (left to
+    # right), except for assignments, which recurse at their own level so
+    # `a=b=3` groups to the right.
     while (true) {
         let k = m.kinds[m.pos];
         let op = m.texts[m.pos];
